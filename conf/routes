@@ -1,0 +1,9 @@
+# Transaction endpoints
+POST    /account/:accountId/transaction         controllers.TransactionController.performTransaction(accountId: String)
+POST    /account/:accountId/incoming-credit    controllers.TransactionController.incomingCredit(accountId: String)
+
+# Payee endpoints
+POST    /account/:accountId/payee              controllers.PayeeController.addPayee(accountId: String)
+
+# Parent endpoints
+POST    /account/:accountId/tag-funds/:purpose/:amount/:parentId  controllers.ParentController.tagFunds(accountId: String, purpose: String, amount: BigDecimal, parentId: String)
