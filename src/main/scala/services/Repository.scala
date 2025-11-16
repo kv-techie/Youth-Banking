@@ -12,6 +12,13 @@ object Repository {
   private val alerts = mutable.Map.empty[String, List[Alert]]
   private val baselines = mutable.Map.empty[String, BehaviorBaseline]
   private val patterns = mutable.Map.empty[String, List[BehaviorPattern]]
+  
+  // Automation-related storage
+  private val automationSchedules = mutable.Map.empty[String, AutomationSchedule]
+  private val originalLimits = mutable.Map.empty[String, Limits]
+  private val scheduledRestores = mutable.Map.empty[String, Instant]
+  private val categoryRestrictions = mutable.Map.empty[String, (Set[Category], Instant)]
+  private val executionLogs = mutable.Map.empty[String, List[ScheduleExecutionLog]]
 
   // ===== Account Operations =====
   
@@ -92,6 +99,72 @@ object Repository {
     }
   }
 
+  // ===== Automation Schedule Operations =====
+  
+  def getAutomationSchedule(accountId: String): Option[AutomationSchedule] = 
+    automationSchedules.get(accountId)
+  
+  def saveAutomationSchedule(schedule: AutomationSchedule): Unit = 
+    automationSchedules.put(schedule.accountId, schedule)
+  
+  def deleteAutomationSchedule(accountId: String): Unit = 
+    automationSchedules.remove(accountId)
+
+  def getAllAutomationSchedules: List[AutomationSchedule] = 
+    automationSchedules.values.toList
+
+  // ===== Original Limits Operations (for restoration) =====
+  
+  def saveOriginalLimits(accountId: String, limits: Limits): Unit = 
+    originalLimits.put(accountId, limits)
+  
+  def getOriginalLimits(accountId: String): Option[Limits] = 
+    originalLimits.get(accountId)
+  
+  def clearOriginalLimits(accountId: String): Unit = 
+    originalLimits.remove(accountId)
+
+  // ===== Scheduled Restore Operations =====
+  
+  def saveScheduledRestore(accountId: String, restoreAt: Instant): Unit = 
+    scheduledRestores.put(accountId, restoreAt)
+  
+  def getScheduledRestore(accountId: String): Option[Instant] = 
+    scheduledRestores.get(accountId)
+  
+  def getAllScheduledRestores(): Map[String, Instant] = 
+    scheduledRestores.toMap
+  
+  def clearScheduledRestore(accountId: String): Unit = 
+    scheduledRestores.remove(accountId)
+
+  // ===== Category Restriction Operations =====
+  
+  def saveCategoryRestriction(accountId: String, categories: Set[Category], expiresAt: Instant): Unit = 
+    categoryRestrictions.put(accountId, (categories, expiresAt))
+  
+  def getCategoryRestriction(accountId: String): Option[(Set[Category], Instant)] = 
+    categoryRestrictions.get(accountId)
+  
+  def getAllCategoryRestrictions(): Map[String, (Set[Category], Instant)] = 
+    categoryRestrictions.toMap
+  
+  def clearCategoryRestriction(accountId: String): Unit = 
+    categoryRestrictions.remove(accountId)
+
+  // ===== Execution Log Operations =====
+  
+  def saveExecutionLog(log: ScheduleExecutionLog): Unit = {
+    val current = executionLogs.getOrElse(log.accountId, Nil)
+    executionLogs.put(log.accountId, log :: current)
+  }
+  
+  def getExecutionLogs(accountId: String): List[ScheduleExecutionLog] = 
+    executionLogs.getOrElse(accountId, Nil)
+
+  def clearExecutionLogs(accountId: String): Unit = 
+    executionLogs.remove(accountId)
+
   // ===== Utility Operations =====
 
   /** Clear all data (useful for testing) */
@@ -100,12 +173,26 @@ object Repository {
     alerts.clear()
     baselines.clear()
     patterns.clear()
+    automationSchedules.clear()
+    originalLimits.clear()
+    scheduledRestores.clear()
+    categoryRestrictions.clear()
+    executionLogs.clear()
   }
 
   /** Clear only AI/ML related data */
   def clearAIData(): Unit = {
     baselines.clear()
     patterns.clear()
+  }
+
+  /** Clear only automation-related data */
+  def clearAutomationData(): Unit = {
+    automationSchedules.clear()
+    originalLimits.clear()
+    scheduledRestores.clear()
+    categoryRestrictions.clear()
+    executionLogs.clear()
   }
 
   /** Get statistics for monitoring */
@@ -116,7 +203,11 @@ object Repository {
       totalBaselines = baselines.size,
       totalPatterns = patterns.values.map(_.size).sum,
       accountsWithBaselines = accounts.keys.count(id => baselines.contains(id)),
-      accountsWithPatterns = accounts.keys.count(id => patterns.contains(id))
+      accountsWithPatterns = accounts.keys.count(id => patterns.contains(id)),
+      accountsWithAutomation = automationSchedules.size,
+      totalExecutionLogs = executionLogs.values.map(_.size).sum,
+      activeScheduledRestores = scheduledRestores.size,
+      activeCategoryRestrictions = categoryRestrictions.size
     )
   }
 
@@ -137,6 +228,13 @@ object Repository {
       if (filtered.isEmpty) patterns.remove(accountId)
       else patterns.put(accountId, filtered)
     }
+
+    // Clean old execution logs
+    executionLogs.foreach { case (accountId, logList) =>
+      val filtered = logList.filter(_.executedAt.isAfter(cutoff))
+      if (filtered.isEmpty) executionLogs.remove(accountId)
+      else executionLogs.put(accountId, filtered)
+    }
   }
 }
 
@@ -147,14 +245,24 @@ case class RepositoryStats(
   totalBaselines: Int,
   totalPatterns: Int,
   accountsWithBaselines: Int,
-  accountsWithPatterns: Int
+  accountsWithPatterns: Int,
+  accountsWithAutomation: Int,
+  totalExecutionLogs: Int,
+  activeScheduledRestores: Int,
+  activeCategoryRestrictions: Int
 ) {
   override def toString: String = {
     s"""Repository Statistics:
        |  Accounts: $totalAccounts
        |  Alerts: $totalAlerts
-       |  Baselines: $totalBaselines (${accountsWithBaselines} accounts)
-       |  Patterns: $totalPatterns (${accountsWithPatterns} accounts)
+       |  AI/ML Data:
+       |    - Baselines: $totalBaselines (${accountsWithBaselines} accounts)
+       |    - Patterns: $totalPatterns (${accountsWithPatterns} accounts)
+       |  Automation Data:
+       |    - Automation Schedules: $accountsWithAutomation accounts
+       |    - Execution Logs: $totalExecutionLogs
+       |    - Active Scheduled Restores: $activeScheduledRestores
+       |    - Active Category Restrictions: $activeCategoryRestrictions
        |""".stripMargin
   }
 }
