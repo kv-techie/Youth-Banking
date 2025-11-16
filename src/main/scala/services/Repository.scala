@@ -10,6 +10,8 @@ import java.time.{Duration, Instant}
 object Repository {
   private val accounts = mutable.Map.empty[String, Account]
   private val alerts = mutable.Map.empty[String, List[Alert]]
+  
+  // AI/ML storage
   private val baselines = mutable.Map.empty[String, BehaviorBaseline]
   private val patterns = mutable.Map.empty[String, List[BehaviorPattern]]
   
@@ -22,6 +24,12 @@ object Repository {
   
   // Fraud detection storage
   private val fraudHistories = mutable.Map.empty[String, FraudScoreHistory]
+  
+  // Cooling-off storage
+  private val coolingOffStates = mutable.Map.empty[String, CoolingOffState]
+  private val coolingOffConfigs = mutable.Map.empty[String, CoolingOffConfig]
+  private val coolingOffHistories = mutable.Map.empty[String, List[CoolingOffHistoryEntry]]
+  private val coolingOffTriggers = mutable.Map.empty[String, List[CoolingOffTrigger]]
 
   // ===== Account Operations =====
   
@@ -182,6 +190,51 @@ object Repository {
   def getAllFraudHistories: List[FraudScoreHistory] = 
     fraudHistories.values.toList
 
+  // ===== Cooling-Off State Operations =====
+  
+  def getCoolingOffState(accountId: String): Option[CoolingOffState] = 
+    coolingOffStates.get(accountId)
+  
+  def saveCoolingOffState(state: CoolingOffState): Unit = 
+    coolingOffStates.put(state.accountId, state)
+  
+  def deleteCoolingOffState(accountId: String): Unit = 
+    coolingOffStates.remove(accountId)
+
+  def getAllActiveCoolingOffs: List[CoolingOffState] = 
+    coolingOffStates.values.filter(_.isActive).toList
+
+  // ===== Cooling-Off Config Operations =====
+  
+  def getCoolingOffConfig(accountId: String): Option[CoolingOffConfig] = 
+    coolingOffConfigs.get(accountId)
+  
+  def saveCoolingOffConfig(config: CoolingOffConfig): Unit = 
+    coolingOffConfigs.put(config.accountId, config)
+
+  // ===== Cooling-Off History Operations =====
+  
+  def getCoolingOffHistory(accountId: String): List[CoolingOffHistoryEntry] = 
+    coolingOffHistories.getOrElse(accountId, Nil)
+  
+  def saveCoolingOffHistory(accountId: String, entry: CoolingOffHistoryEntry): Unit = {
+    val current = coolingOffHistories.getOrElse(accountId, Nil)
+    coolingOffHistories.put(accountId, entry :: current)
+  }
+
+  def clearCoolingOffHistory(accountId: String): Unit = 
+    coolingOffHistories.remove(accountId)
+
+  // ===== Cooling-Off Trigger Operations =====
+  
+  def saveCoolingOffTrigger(accountId: String, trigger: CoolingOffTrigger): Unit = {
+    val current = coolingOffTriggers.getOrElse(accountId, Nil)
+    coolingOffTriggers.put(accountId, trigger :: current)
+  }
+  
+  def getCoolingOffTriggers(accountId: String): List[CoolingOffTrigger] = 
+    coolingOffTriggers.getOrElse(accountId, Nil)
+
   // ===== Utility Operations =====
 
   /** Clear all data (useful for testing) */
@@ -196,6 +249,10 @@ object Repository {
     categoryRestrictions.clear()
     executionLogs.clear()
     fraudHistories.clear()
+    coolingOffStates.clear()
+    coolingOffConfigs.clear()
+    coolingOffHistories.clear()
+    coolingOffTriggers.clear()
   }
 
   /** Clear only AI/ML related data */
@@ -218,6 +275,13 @@ object Repository {
     fraudHistories.clear()
   }
 
+  /** Clear only cooling-off data */
+  def clearCoolingOffData(): Unit = {
+    coolingOffStates.clear()
+    coolingOffHistories.clear()
+    coolingOffTriggers.clear()
+  }
+
   /** Get statistics for monitoring */
   def getStats: RepositoryStats = {
     RepositoryStats(
@@ -232,7 +296,9 @@ object Repository {
       activeScheduledRestores = scheduledRestores.size,
       activeCategoryRestrictions = categoryRestrictions.size,
       accountsWithFraudHistory = fraudHistories.size,
-      totalFraudDetections = fraudHistories.values.map(_.totalFraudDetected).sum
+      totalFraudDetections = fraudHistories.values.map(_.totalFraudDetected).sum,
+      activeCoolingOffs = coolingOffStates.values.count(_.isActive),
+      totalCoolingOffEvents = coolingOffHistories.values.map(_.size).sum
     )
   }
 
@@ -270,6 +336,20 @@ object Repository {
         fraudHistories.put(accountId, history.copy(scores = filtered))
       }
     }
+
+    // Clean old cooling-off history
+    coolingOffHistories.foreach { case (accountId, historyList) =>
+      val filtered = historyList.filter(_.triggeredAt.isAfter(cutoff))
+      if (filtered.isEmpty) coolingOffHistories.remove(accountId)
+      else coolingOffHistories.put(accountId, filtered)
+    }
+
+    // Clean old cooling-off triggers
+    coolingOffTriggers.foreach { case (accountId, triggerList) =>
+      val filtered = triggerList.filter(_.triggeredAt.isAfter(cutoff))
+      if (filtered.isEmpty) coolingOffTriggers.remove(accountId)
+      else coolingOffTriggers.put(accountId, filtered)
+    }
   }
 }
 
@@ -286,7 +366,9 @@ case class RepositoryStats(
   activeScheduledRestores: Int,
   activeCategoryRestrictions: Int,
   accountsWithFraudHistory: Int,
-  totalFraudDetections: Int
+  totalFraudDetections: Int,
+  activeCoolingOffs: Int,
+  totalCoolingOffEvents: Int
 ) {
   override def toString: String = {
     s"""Repository Statistics:
@@ -303,6 +385,9 @@ case class RepositoryStats(
        |  Fraud Detection:
        |    - Fraud Histories: $accountsWithFraudHistory accounts
        |    - Total Fraud Detections: $totalFraudDetections
+       |  Cooling-Off System:
+       |    - Active Cooling-Offs: $activeCoolingOffs
+       |    - Total Historical Events: $totalCoolingOffEvents
        |""".stripMargin
   }
 }
