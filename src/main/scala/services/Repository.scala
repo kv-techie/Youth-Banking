@@ -8,6 +8,7 @@ import java.time.{Duration, Instant}
   * In production, replace with a real database.
   */
 object Repository {
+  // Core storage
   private val accounts = mutable.Map.empty[String, Account]
   private val alerts = mutable.Map.empty[String, List[Alert]]
   
@@ -15,7 +16,7 @@ object Repository {
   private val baselines = mutable.Map.empty[String, BehaviorBaseline]
   private val patterns = mutable.Map.empty[String, List[BehaviorPattern]]
   
-  // Automation-related storage
+  // Automation storage
   private val automationSchedules = mutable.Map.empty[String, AutomationSchedule]
   private val originalLimits = mutable.Map.empty[String, Limits]
   private val scheduledRestores = mutable.Map.empty[String, Instant]
@@ -30,6 +31,14 @@ object Repository {
   private val coolingOffConfigs = mutable.Map.empty[String, CoolingOffConfig]
   private val coolingOffHistories = mutable.Map.empty[String, List[CoolingOffHistoryEntry]]
   private val coolingOffTriggers = mutable.Map.empty[String, List[CoolingOffTrigger]]
+  
+  // Parent dashboard storage
+  private val pendingApprovals = mutable.Map.empty[String, List[PendingApproval]]
+  private val parentActions = mutable.Map.empty[String, List[ParentAction]]
+  private val parentNotifications = mutable.Map.empty[String, List[ParentNotification]]
+  private val parentPreferences = mutable.Map.empty[String, ParentPreferences]
+  private val readAlerts = mutable.Map.empty[(String, String, Instant), Boolean] // (parentId, accountId, alertTimestamp)
+  private val accountParentMapping = mutable.Map.empty[String, String] // accountId -> parentId
 
   // ===== Account Operations =====
   
@@ -88,14 +97,13 @@ object Repository {
       case Some(p) =>
         // Merge with existing pattern
         val updated = p.copy(
-          severity = (p.severity + pattern.severity) / 2, // Average severity
+          severity = (p.severity + pattern.severity) / 2,
           occurrences = p.occurrences + pattern.occurrences,
           lastDetected = pattern.lastDetected,
-          metadata = p.metadata ++ pattern.metadata // Merge metadata
+          metadata = p.metadata ++ pattern.metadata
         )
         patterns.put(accountId, updated :: current.filterNot(_ == p))
       case None =>
-        // Add new pattern
         patterns.put(accountId, pattern :: current)
   }
 
@@ -124,7 +132,7 @@ object Repository {
   def getAllAutomationSchedules: List[AutomationSchedule] = 
     automationSchedules.values.toList
 
-  // ===== Original Limits Operations (for restoration) =====
+  // ===== Original Limits Operations =====
   
   def saveOriginalLimits(accountId: String, limits: Limits): Unit = 
     originalLimits.put(accountId, limits)
@@ -235,6 +243,127 @@ object Repository {
   def getCoolingOffTriggers(accountId: String): List[CoolingOffTrigger] = 
     coolingOffTriggers.getOrElse(accountId, Nil)
 
+  // ===== Pending Approval Operations =====
+  
+  def getPendingApprovals(accountId: String): List[PendingApproval] = 
+    pendingApprovals.getOrElse(accountId, Nil).filter(_.status == ApprovalStatus.Pending)
+  
+  def getAllPendingApprovals: List[PendingApproval] =
+    pendingApprovals.values.flatten.filter(_.status == ApprovalStatus.Pending).toList
+  
+  def getPendingApprovalById(approvalId: String): Option[PendingApproval] = 
+    pendingApprovals.values.flatten.find(_.approvalId == approvalId)
+  
+  def savePendingApproval(approval: PendingApproval): Unit = {
+    val current = pendingApprovals.getOrElse(approval.accountId, Nil)
+    pendingApprovals.put(approval.accountId, approval :: current)
+  }
+  
+  def updateApprovalStatus(approvalId: String, status: ApprovalStatus): Unit = {
+    pendingApprovals.foreach { case (accountId, approvals) =>
+      val updated = approvals.map { approval =>
+        if (approval.approvalId == approvalId) approval.copy(status = status)
+        else approval
+      }
+      pendingApprovals.put(accountId, updated)
+    }
+  }
+
+  def removePendingApproval(approvalId: String): Unit = {
+    pendingApprovals.foreach { case (accountId, approvals) =>
+      val filtered = approvals.filterNot(_.approvalId == approvalId)
+      if (filtered.isEmpty) pendingApprovals.remove(accountId)
+      else pendingApprovals.put(accountId, filtered)
+    }
+  }
+
+  // ===== Parent Action Operations =====
+  
+  def saveParentAction(action: ParentAction): Unit = {
+    val current = parentActions.getOrElse(action.parentId, Nil)
+    parentActions.put(action.parentId, action :: current)
+  }
+  
+  def getParentActions(parentId: String, accountId: Option[String]): List[ParentAction] = {
+    val actions = parentActions.getOrElse(parentId, Nil)
+    accountId match {
+      case Some(accId) => actions.filter(_.accountId == accId)
+      case None => actions
+    }
+  }
+
+  def clearParentActions(parentId: String): Unit = 
+    parentActions.remove(parentId)
+
+  // ===== Parent Notification Operations =====
+  
+  def saveParentNotification(notification: ParentNotification): Unit = {
+    val current = parentNotifications.getOrElse(notification.parentId, Nil)
+    parentNotifications.put(notification.parentId, notification :: current)
+  }
+  
+  def getParentNotifications(parentId: String): List[ParentNotification] = 
+    parentNotifications.getOrElse(parentId, Nil)
+  
+  def markNotificationRead(notificationId: String): Unit = {
+    parentNotifications.foreach { case (parentId, notifications) =>
+      val updated = notifications.map { notif =>
+        if (notif.notificationId == notificationId) notif.copy(read = true)
+        else notif
+      }
+      parentNotifications.put(parentId, updated)
+    }
+  }
+
+  def clearNotifications(parentId: String): Unit = 
+    parentNotifications.remove(parentId)
+
+  // ===== Parent Preferences Operations =====
+  
+  def getParentPreferences(parentId: String): Option[ParentPreferences] = 
+    parentPreferences.get(parentId)
+  
+  def saveParentPreferences(prefs: ParentPreferences): Unit = 
+    parentPreferences.put(prefs.parentId, prefs)
+
+  // ===== Alert Read Status Operations =====
+  
+  def markAlertRead(parentId: String, accountId: String, alertTimestamp: Instant): Unit = 
+    readAlerts.put((parentId, accountId, alertTimestamp), true)
+  
+  def isAlertRead(parentId: String, accountId: String, alert: Alert): Boolean = 
+    readAlerts.getOrElse((parentId, accountId, alert.timestamp), false)
+
+  def clearReadAlerts(parentId: String, accountId: String): Unit = {
+    readAlerts.filterInPlace { case ((pId, accId, _), _) =>
+      !(pId == parentId && accId == accountId)
+    }
+  }
+
+  // ===== Account-Parent Mapping Operations =====
+  
+  def linkAccountToParent(accountId: String, parentId: String): Unit = 
+    accountParentMapping.put(accountId, parentId)
+  
+  def unlinkAccount(accountId: String): Unit = 
+    accountParentMapping.remove(accountId)
+  
+  def getAccountsByParent(parentId: String): List[Account] = 
+    accountParentMapping.filter(_._2 == parentId).keys.flatMap(getAccount).toList
+  
+  def getParentForAccount(accountId: String): Option[String] = 
+    accountParentMapping.get(accountId)
+
+  // ===== Minor Operations (placeholder) =====
+  
+  private val minors = mutable.Map.empty[String, Minor]
+  
+  def getMinor(minorId: String): Option[Minor] = 
+    minors.get(minorId).orElse(Some(Minor(id = minorId, name = s"Minor-$minorId", age = 16)))
+  
+  def saveMinor(minor: Minor): Unit = 
+    minors.put(minor.id, minor)
+
   // ===== Utility Operations =====
 
   /** Clear all data (useful for testing) */
@@ -253,6 +382,13 @@ object Repository {
     coolingOffConfigs.clear()
     coolingOffHistories.clear()
     coolingOffTriggers.clear()
+    pendingApprovals.clear()
+    parentActions.clear()
+    parentNotifications.clear()
+    parentPreferences.clear()
+    readAlerts.clear()
+    accountParentMapping.clear()
+    minors.clear()
   }
 
   /** Clear only AI/ML related data */
@@ -282,7 +418,15 @@ object Repository {
     coolingOffTriggers.clear()
   }
 
-  /** Get statistics for monitoring */
+  /** Clear only parent dashboard data */
+  def clearParentDashboardData(): Unit = {
+    pendingApprovals.clear()
+    parentActions.clear()
+    parentNotifications.clear()
+    readAlerts.clear()
+  }
+
+  /** Get comprehensive statistics */
   def getStats: RepositoryStats = {
     RepositoryStats(
       totalAccounts = accounts.size,
@@ -298,7 +442,11 @@ object Repository {
       accountsWithFraudHistory = fraudHistories.size,
       totalFraudDetections = fraudHistories.values.map(_.totalFraudDetected).sum,
       activeCoolingOffs = coolingOffStates.values.count(_.isActive),
-      totalCoolingOffEvents = coolingOffHistories.values.map(_.size).sum
+      totalCoolingOffEvents = coolingOffHistories.values.map(_.size).sum,
+      totalPendingApprovals = pendingApprovals.values.flatten.count(_.status == ApprovalStatus.Pending),
+      totalParentActions = parentActions.values.map(_.size).sum,
+      totalNotifications = parentNotifications.values.map(_.size).sum,
+      unreadNotifications = parentNotifications.values.flatten.count(!_.read)
     )
   }
 
@@ -350,6 +498,29 @@ object Repository {
       if (filtered.isEmpty) coolingOffTriggers.remove(accountId)
       else coolingOffTriggers.put(accountId, filtered)
     }
+
+    // Clean old pending approvals (expired or completed)
+    pendingApprovals.foreach { case (accountId, approvalList) =>
+      val filtered = approvalList.filter(a => 
+        a.submittedAt.isAfter(cutoff) || a.status == ApprovalStatus.Pending
+      )
+      if (filtered.isEmpty) pendingApprovals.remove(accountId)
+      else pendingApprovals.put(accountId, filtered)
+    }
+
+    // Clean old parent actions
+    parentActions.foreach { case (parentId, actionList) =>
+      val filtered = actionList.filter(_.timestamp.isAfter(cutoff))
+      if (filtered.isEmpty) parentActions.remove(parentId)
+      else parentActions.put(parentId, filtered)
+    }
+
+    // Clean old notifications
+    parentNotifications.foreach { case (parentId, notifList) =>
+      val filtered = notifList.filter(_.createdAt.isAfter(cutoff))
+      if (filtered.isEmpty) parentNotifications.remove(parentId)
+      else parentNotifications.put(parentId, filtered)
+    }
   }
 }
 
@@ -368,7 +539,11 @@ case class RepositoryStats(
   accountsWithFraudHistory: Int,
   totalFraudDetections: Int,
   activeCoolingOffs: Int,
-  totalCoolingOffEvents: Int
+  totalCoolingOffEvents: Int,
+  totalPendingApprovals: Int,
+  totalParentActions: Int,
+  totalNotifications: Int,
+  unreadNotifications: Int
 ) {
   override def toString: String = {
     s"""Repository Statistics:
@@ -388,6 +563,13 @@ case class RepositoryStats(
        |  Cooling-Off System:
        |    - Active Cooling-Offs: $activeCoolingOffs
        |    - Total Historical Events: $totalCoolingOffEvents
+       |  Parent Dashboard:
+       |    - Pending Approvals: $totalPendingApprovals
+       |    - Parent Actions: $totalParentActions
+       |    - Notifications: $totalNotifications ($unreadNotifications unread)
        |""".stripMargin
   }
 }
+
+/** Placeholder Minor model */
+case class Minor(id: String, name: String, age: Int)
