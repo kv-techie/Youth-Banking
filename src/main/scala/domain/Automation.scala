@@ -151,3 +151,14 @@ case class ScheduleExecutionLog(
   success: Boolean,
   message: String
 )
+
+/** Safety modes for automated scheduling - FIXED: Added this enum */
+enum SafetyMode:
+  case SchoolHoursSafe    // Strict limits during school hours
+  case MaxSecurity        // Maximum restrictions
+  case WeekendExplorer    // Relaxed limits for weekends
+  case NormalMode         // Standard operating mode
+  case RestrictedMode     // Moderate restrictions
+  case EmergencyMode      // Emergency override active
+  case TravelMode         // For travel/vacation periods
+  case StudyMode          // Focused spending for education
