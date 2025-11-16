@@ -1,9 +1,15 @@
-# Transaction endpoints
-POST    /account/:accountId/transaction         controllers.TransactionController.performTransaction(accountId: String)
-POST    /account/:accountId/incoming-credit    controllers.TransactionController.incomingCredit(accountId: String)
+# Routes for Youth Banking API
 
 # Payee endpoints
-POST    /account/:accountId/payee              controllers.PayeeController.addPayee(accountId: String)
+GET     /api/payees/:accountId              controllers.PayeeController.getPayees(accountId: String)
+POST    /api/payees/:accountId/add          controllers.PayeeController.addPayee(accountId: String)
+DELETE  /api/payees/:accountId/:payeeId     controllers.PayeeController.removePayee(accountId: String, payeeId: String)
 
 # Parent endpoints
-POST    /account/:accountId/tag-funds/:purpose/:amount/:parentId  controllers.ParentController.tagFunds(accountId: String, purpose: String, amount: BigDecimal, parentId: String)
+GET     /api/parent/:parentId/dashboard     controllers.ParentController.getDashboard(parentId: String)
+POST    /api/parent/approve/:approvalId     controllers.ParentController.approveTransaction(approvalId: String)
+POST    /api/parent/reject/:approvalId      controllers.ParentController.rejectTransaction(approvalId: String)
+GET     /api/parent/:parentId/alerts        controllers.ParentController.getAlerts(parentId: String)
+
+# Health check
+GET     /health                             controllers.HomeController.health
