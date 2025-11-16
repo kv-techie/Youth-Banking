@@ -16,6 +16,7 @@ enum AlertType:
   case PurposeUnlockRequested
   case FraudSuspected
   case GenericNotice
+  
   // New AI-driven alert types
   case BehavioralAnomaly
   case HighRiskScore
@@ -24,6 +25,24 @@ enum AlertType:
   case VelocityAnomalyDetected
   case PatternDetected
   case BaselineDeviation
+  
+  // FIXED: Added missing types used in services
+  case TransactionBlocked
+  case LimitExceeded
+  case UnknownPayeeTransaction
+  case HighRiskTransaction
+  case NightTransaction
+  case PurposeFundsUsed
+  case WithdrawalLimitExceeded
+  case EmergencyOverrideUsed
+  case PayeeApprovalRequired
+  case CategoryLimitReached
+  case MonthlyLimitWarning
+  case SuspiciousActivity
+  case FraudDetected
+  case AccountFrozen
+  case CoolingOffActivated
+  case ParentActionRequired
 
 /** Alert raised by the system for parent notification or logging
   *
@@ -49,6 +68,15 @@ case class Alert(
     case AlertType.SocialEngineeringDetected => true
     case AlertType.AccountTakeoverSuspected => true
     case AlertType.RequiresParentApproval => true
+    case AlertType.TransactionBlocked => true
+    case AlertType.HighRiskTransaction => true
+    case AlertType.VelocityAnomalyDetected => true
+    case AlertType.IncomingCreditExceeded => true
+    case AlertType.WithdrawalLimitExceeded => true
+    case AlertType.FraudDetected => true
+    case AlertType.AccountFrozen => true
+    case AlertType.CoolingOffActivated => true
+    case AlertType.ParentActionRequired => true
     case _ => false
 
   /** Check if this is an AI-generated alert */
@@ -72,6 +100,15 @@ case class Alert(
         case AlertType.IncomingCreditExceeded => AlertSeverity.Medium
         case AlertType.BehavioralAnomaly => AlertSeverity.Medium
         case AlertType.VelocityAnomalyDetected => AlertSeverity.Medium
+        case AlertType.TransactionBlocked => AlertSeverity.High
+        case AlertType.FraudDetected => AlertSeverity.Critical
+        case AlertType.AccountFrozen => AlertSeverity.Critical
+        case AlertType.CoolingOffActivated => AlertSeverity.Medium
+        case AlertType.HighRiskTransaction => AlertSeverity.High
+        case AlertType.EmergencyOverrideUsed => AlertSeverity.High
+        case AlertType.LimitExceeded => AlertSeverity.Medium
+        case AlertType.CategoryLimitReached => AlertSeverity.Low
+        case AlertType.MonthlyLimitWarning => AlertSeverity.Low
         case _ => AlertSeverity.Low
   }
 
