@@ -7,92 +7,191 @@ import scalafx.scene.layout._
 import scalafx.collections.ObservableBuffer
 import scalafx.geometry.Insets
 import scalafx.Includes._
+import java.time.Instant
+import java.util.UUID
 
-// === MOCK backend == Replace with imports from your backend code ===
-case class Account(id: String, minorId: String, var balance: BigDecimal, limits: Limits)
-case class Limits(monthly: Option[BigDecimal], perTransaction: Option[BigDecimal])
-object Category extends Enumeration { val Food, Entertainment, Education, Travel = Value }
-case class Transaction(
-  id: String, fromAccountId: String, toPayeeId: Option[String],
-  amount: BigDecimal, category: Category.Value, timestamp: java.time.Instant = java.time.Instant.now
-)
-class Repository {
-  private var accounts = Map[String, Account]()
-  private var transactions = List[Transaction]()
-  def addAccount(acc: Account): Unit = accounts += acc.id -> acc
-  def getAccount(id: String): Option[Account] = accounts.get(id)
-  def addTransaction(tx: Transaction): Unit = transactions = tx :: transactions
-  def getTransactions(accId: String): List[Transaction] = transactions.filter(_.fromAccountId == accId)
-  def getMonthlySpending(accId: String): BigDecimal = getTransactions(accId).map(_.amount).sum
-}
-class ParentDashboardController(repo: Repository) {
-  def processTransaction(accId: String, tx: Transaction): Either[String, Account] = {
-    val acc = repo.getAccount(accId).get
-    if (tx.amount > acc.limits.perTransaction.getOrElse(BigDecimal(99999))) Left("Exceeded Per Transaction Limit")
-    else if (repo.getMonthlySpending(accId) + tx.amount > acc.limits.monthly.getOrElse(BigDecimal(999999))) Left("Exceeded Monthly Limit")
-    else {
-      acc.balance -= tx.amount
-      repo.addTransaction(tx)
-      Right(acc)
-    }
-  }
-  def getPendingApprovals(parentId: String): List[Transaction] = List()
-  def approveTransaction(parentId: String, txId: String): Boolean = true
-}
-
-// === END MOCK backend ===
+// Import your actual domain classes
+import domain._
+import services._
+import controllers._
 
 object MainApp extends JFXApp3 {
-  // Mock backend instance
+  
+  // Initialize your actual backend services
   val repository = new Repository()
-  val dashboardController = new ParentDashboardController(repository)
-  val minorAccount = Account("acc123", "minor123", BigDecimal(10000), Limits(Some(5000), Some(1000)))
-  repository.addAccount(minorAccount)
+  val aiRiskEngine = new AIRiskEngine()
+  val fraudDetection = new AdvancedFraudDetectionService(repository)
+  val monitoringService = new MonitoringService(repository, aiRiskEngine)
+  val transactionController = new TransactionController(repository, monitoringService)
+  
+  // Create demo account with proper structure
+  val demoAccount = Account(
+    id = "acc_demo_123",
+    minorId = "minor_demo_456",
+    balance = BigDecimal(10000),
+    lockedFunds = Map.empty,
+    limits = Limits(
+      monthly = Some(BigDecimal(5000)),
+      perTransaction = Some(BigDecimal(1000)),
+      perCategory = Map(
+        Category.Food -> BigDecimal(2000),
+        Category.Entertainment -> BigDecimal(1000),
+        Category.Education -> BigDecimal(3000)
+      ),
+      withdrawalLimits = WithdrawalLimits(
+        daily = Some(BigDecimal(500)),
+        weekly = Some(BigDecimal(2000)),
+        monthly = Some(BigDecimal(5000))
+      )
+    ),
+    payees = List(
+      Payee(
+        id = "payee_1",
+        name = "Pizza Hut",
+        accountNumber = "9876543210",
+        trusted = true,
+        addedAt = Instant.now()
+      ),
+      Payee(
+        id = "payee_2", 
+        name = "BookStore",
+        accountNumber = "1234567890",
+        trusted = true,
+        addedAt = Instant.now()
+      )
+    ),
+    transactions = List.empty
+  )
+  
+  // Add account to repository
+  repository.addAccount(demoAccount)
+  
+  // Create demo parent
+  val demoParent = Parent(
+    id = "parent_demo_789",
+    name = "Demo Parent",
+    email = "parent@demo.com",
+    minorAccountIds = List(demoAccount.id)
+  )
+  repository.addParent(demoParent)
 
   override def start(): Unit = {
+    
+    // ===== MINOR DASHBOARD TAB =====
+    
+    // Balance display
+    var currentAccount = demoAccount
     val balanceLabel = new Label {
-      text = s"Current Balance: ₹${minorAccount.balance}"
-      style = "-fx-font-size: 18px; -fx-font-weight: bold;"
+      text = f"Current Balance: ₹${currentAccount.availableBalance}%.2f"
+      style = "-fx-font-size: 20px; -fx-font-weight: bold; -fx-text-fill: #2e7d32;"
     }
-    val monthlyLimit = minorAccount.limits.monthly.getOrElse(BigDecimal(0))
+    
+    val totalBalanceLabel = new Label {
+      text = f"Total Balance (incl. locked): ₹${currentAccount.totalBalance}%.2f"
+      style = "-fx-font-size: 12px; -fx-text-fill: #666;"
+    }
+    
+    // Monthly limit status
+    val monthlySpent = repository.getMonthlySpending(currentAccount.id)
+    val monthlyLimit = currentAccount.limits.monthly.getOrElse(BigDecimal(0))
     val limitStatusLabel = new Label {
-      val used = repository.getMonthlySpending(minorAccount.id)
-      text = s"Monthly Limit: ₹$used / ₹$monthlyLimit"
+      text = f"Monthly Spending: ₹$monthlySpent%.2f / ₹$monthlyLimit%.2f"
+      style = "-fx-font-size: 14px;"
     }
-    val transactionTable = new TableView[Transaction](ObservableBuffer(repository.getTransactions(minorAccount.id))) {
+    
+    // Category limit display
+    val categoryLimitLabel = new Label {
+      val foodLimit = currentAccount.limits.perCategory.getOrElse(Category.Food, BigDecimal(0))
+      text = f"Food Limit: ₹$foodLimit%.2f"
+      style = "-fx-font-size: 12px; -fx-text-fill: #555;"
+    }
+    
+    // Transaction table
+    val transactionBuffer = ObservableBuffer[Transaction]()
+    val transactionTable = new TableView[Transaction](transactionBuffer) {
       columns ++= List(
         new TableColumn[Transaction, String] {
           text = "Amount"
-          cellValueFactory = {_.value.amount.toString}
-          prefWidth = 80
-        },
-        new TableColumn[Transaction, String] {
-          text = "Category"
-          cellValueFactory = {_.value.category.toString}
+          cellValueFactory = t => s"₹${t.value.amount}"
           prefWidth = 100
         },
         new TableColumn[Transaction, String] {
+          text = "Category"
+          cellValueFactory = t => t.value.category.toString
+          prefWidth = 120
+        },
+        new TableColumn[Transaction, String] {
+          text = "Status"
+          cellValueFactory = t => t.value.status.toString
+          prefWidth = 150
+        },
+        new TableColumn[Transaction, String] {
           text = "Time"
-          cellValueFactory = {_.value.timestamp.toString}
-          prefWidth = 260
+          cellValueFactory = t => t.value.timestamp.toString.substring(11, 19)
+          prefWidth = 100
         }
       )
-      prefHeight = 180
+      prefHeight = 200
     }
-    val makeTransactionButton = new Button("Simulate Food Transaction") {
+    
+    // Category selector
+    val categoryChoice = new ChoiceBox[Category] {
+      items = ObservableBuffer(Category.Food, Category.Entertainment, Category.Education, Category.Travel)
+      value = Category.Food
+    }
+    
+    // Amount field
+    val amountField = new TextField {
+      promptText = "Enter amount (₹)"
+      prefWidth = 150
+    }
+    
+    // Make transaction button
+    val makeTransactionButton = new Button("Make Transaction") {
+      style = "-fx-background-color: #1976d2; -fx-text-fill: white; -fx-font-size: 14px;"
       onAction = handle {
-        val transaction = Transaction(java.util.UUID.randomUUID().toString, minorAccount.id, Some("payee1"), BigDecimal(500), Category.Food)
-        dashboardController.processTransaction(minorAccount.id, transaction) match {
-          case Right(acc) =>
-            balanceLabel.text = s"Current Balance: ₹${acc.balance}"
-            limitStatusLabel.text = s"Monthly Limit: ₹${repository.getMonthlySpending(minorAccount.id)} / ₹$monthlyLimit"
-            transactionTable.items() += transaction
-            showAlert("Success", "Transaction approved!")
-          case Left(err) =>
-            showAlert("Error", err)
+        try {
+          val amount = BigDecimal(amountField.text())
+          val category = categoryChoice.value()
+          
+          val transaction = Transaction(
+            id = UUID.randomUUID().toString,
+            fromAccountId = currentAccount.id,
+            toPayeeId = Some(currentAccount.payees.head.id),
+            amount = amount,
+            category = category,
+            timestamp = Instant.now(),
+            status = TransactionStatus.Pending
+          )
+          
+          // Process through your TransactionController
+          transactionController.processTransaction(currentAccount.id, transaction) match {
+            case Right(updatedAccount) =>
+              currentAccount = updatedAccount
+              balanceLabel.text = f"Current Balance: ₹${currentAccount.availableBalance}%.2f"
+              totalBalanceLabel.text = f"Total Balance (incl. locked): ₹${currentAccount.totalBalance}%.2f"
+              
+              val newMonthlySpent = repository.getMonthlySpending(currentAccount.id)
+              limitStatusLabel.text = f"Monthly Spending: ₹$newMonthlySpent%.2f / ₹$monthlyLimit%.2f"
+              
+              transactionBuffer.clear()
+              transactionBuffer ++= repository.getTransactions(currentAccount.id).take(10)
+              
+              amountField.text = ""
+              showAlert("Success", f"Transaction of ₹$amount%.2f approved!", Alert.AlertType.Information)
+              
+            case Left(error) =>
+              showAlert("Transaction Blocked", error, Alert.AlertType.Warning)
+          }
+        } catch {
+          case _: NumberFormatException =>
+            showAlert("Invalid Input", "Please enter a valid amount", Alert.AlertType.Error)
+          case e: Exception =>
+            showAlert("Error", s"Transaction failed: ${e.getMessage}", Alert.AlertType.Error)
         }
       }
     }
+    
     val minorTab = new Tab {
       text = "Minor Dashboard"
       closable = false
@@ -100,69 +199,192 @@ object MainApp extends JFXApp3 {
         padding = Insets(20)
         spacing = 15
         children = Seq(
+          new Label("Youth Banking - Minor Account") {
+            style = "-fx-font-size: 18px; -fx-font-weight: bold;"
+          },
+          new Separator(),
           balanceLabel,
+          totalBalanceLabel,
           limitStatusLabel,
-          new Label("Recent Transactions:"),
-          transactionTable,
-          makeTransactionButton
+          categoryLimitLabel,
+          new Separator(),
+          new Label("Make a Transaction:") {
+            style = "-fx-font-size: 14px; -fx-font-weight: bold;"
+          },
+          new HBox {
+            spacing = 10
+            children = Seq(
+              new Label("Category:"),
+              categoryChoice,
+              new Label("Amount:"),
+              amountField,
+              makeTransactionButton
+            )
+          },
+          new Label("Recent Transactions:") {
+            style = "-fx-font-size: 14px; -fx-font-weight: bold;"
+          },
+          transactionTable
         )
       }
     }
-
-    val approvalBuffer = ObservableBuffer[Transaction]()
-    val approvalsListView = new ListView[Transaction](approvalBuffer) {
-      prefHeight = 100
+    
+    // ===== PARENT DASHBOARD TAB =====
+    
+    val pendingApprovalsBuffer = ObservableBuffer[Transaction]()
+    val pendingApprovalsTable = new TableView[Transaction](pendingApprovalsBuffer) {
+      columns ++= List(
+        new TableColumn[Transaction, String] {
+          text = "Amount"
+          cellValueFactory = t => f"₹${t.value.amount}%.2f"
+          prefWidth = 100
+        },
+        new TableColumn[Transaction, String] {
+          text = "Category"
+          cellValueFactory = t => t.value.category.toString
+          prefWidth = 120
+        },
+        new TableColumn[Transaction, String] {
+          text = "Status"
+          cellValueFactory = t => t.value.status.toString
+          prefWidth = 150
+        }
+      )
+      prefHeight = 200
     }
-    val approveButton = new Button("Approve Selected") {
+    
+    val refreshApprovalsButton = new Button("Refresh Pending") {
       onAction = handle {
-        val selected = approvalsListView.selectionModel().getSelectedItem
+        pendingApprovalsBuffer.clear()
+        val pending = repository.getTransactions(currentAccount.id)
+          .filter(_.status == TransactionStatus.RequiresParentApproval)
+        pendingApprovalsBuffer ++= pending
+      }
+    }
+    
+    val approveButton = new Button("Approve Selected") {
+      style = "-fx-background-color: #2e7d32; -fx-text-fill: white;"
+      onAction = handle {
+        val selected = pendingApprovalsTable.selectionModel().getSelectedItem
         if (selected != null) {
-          dashboardController.approveTransaction("parent123", selected.id)
-          approvalBuffer.remove(selected)
-          showAlert("Approved", s"Transaction ${selected.id} approved")
+          // Update transaction status
+          repository.updateTransactionStatus(selected.id, TransactionStatus.Completed)
+          pendingApprovalsBuffer.remove(selected)
+          showAlert("Approved", s"Transaction ${selected.id.take(8)}... approved!", Alert.AlertType.Information)
+        } else {
+          showAlert("No Selection", "Please select a transaction to approve", Alert.AlertType.Warning)
         }
       }
     }
+    
     val parentTab = new Tab {
       text = "Parent Dashboard"
       closable = false
       content = new VBox {
         padding = Insets(20)
-        spacing = 10
+        spacing = 15
         children = Seq(
-          new Label("Pending Approvals:"),
-          approvalsListView,
-          approveButton
+          new Label("Parent Control Panel") {
+            style = "-fx-font-size: 18px; -fx-font-weight: bold;"
+          },
+          new Separator(),
+          new Label(s"Managing Account: ${currentAccount.id}"),
+          new Label(s"Minor: ${currentAccount.minorId}"),
+          new Separator(),
+          new Label("Pending Approvals:") {
+            style = "-fx-font-size: 14px; -fx-font-weight: bold;"
+          },
+          pendingApprovalsTable,
+          new HBox {
+            spacing = 10
+            children = Seq(refreshApprovalsButton, approveButton)
+          }
         )
       }
     }
-
+    
+    // ===== AI RISK TAB =====
+    
+    val riskScoreLabel = new Label("Risk Score: -- / 100") {
+      style = "-fx-font-size: 16px; -fx-font-weight: bold;"
+    }
+    
+    val riskLevelLabel = new Label("Risk Level: --") {
+      style = "-fx-font-size: 14px;"
+    }
+    
+    val runRiskCheckButton = new Button("Run AI Risk Analysis") {
+      style = "-fx-background-color: #d32f2f; -fx-text-fill: white; -fx-font-size: 14px;"
+      onAction = handle {
+        try {
+          val amount = BigDecimal(500)
+          val testTx = Transaction(
+            fromAccountId = currentAccount.id,
+            toPayeeId = Some("unknown_payee"),
+            amount = amount,
+            category = Category.Entertainment
+          )
+          
+          val riskScore = aiRiskEngine.calculateRiskScore(currentAccount, testTx)
+          riskScoreLabel.text = f"Risk Score: ${riskScore.score}%.1f / 100"
+          riskLevelLabel.text = s"Risk Level: ${riskScore.level}"
+          riskLevelLabel.style = riskScore.level match {
+            case RiskLevel.Low => "-fx-font-size: 14px; -fx-text-fill: green;"
+            case RiskLevel.Medium => "-fx-font-size: 14px; -fx-text-fill: orange;"
+            case RiskLevel.High => "-fx-font-size: 14px; -fx-text-fill: red;"
+            case RiskLevel.Critical => "-fx-font-size: 14px; -fx-text-fill: darkred; -fx-font-weight: bold;"
+          }
+          
+          showAlert("AI Analysis Complete", 
+            f"Risk Score: ${riskScore.score}%.1f\nLevel: ${riskScore.level}\nReasons: ${riskScore.reasons.mkString(", ")}", 
+            Alert.AlertType.Information)
+        } catch {
+          case e: Exception =>
+            showAlert("Error", s"Risk analysis failed: ${e.getMessage}", Alert.AlertType.Error)
+        }
+      }
+    }
+    
     val aiRiskTab = new Tab {
-      text = "AI Risk"
+      text = "AI Risk Monitor"
       closable = false
       content = new VBox {
         padding = Insets(20)
         spacing = 15
         children = Seq(
-          new Label("Demo: AI Risk Analysis coming soon! (stub)") {
-            style = "-fx-font-size: 16px;"
+          new Label("AI-Powered Risk Analysis") {
+            style = "-fx-font-size: 18px; -fx-font-weight: bold;"
+          },
+          new Separator(),
+          riskScoreLabel,
+          riskLevelLabel,
+          runRiskCheckButton,
+          new Separator(),
+          new Label("Real-time fraud detection and behavioral analysis") {
+            style = "-fx-font-size: 12px; -fx-text-fill: #666;"
           }
         )
       }
     }
-
+    
+    // ===== MAIN STAGE =====
+    
     stage = new JFXApp3.PrimaryStage {
-      title = "Youth Banking Demo"
-      scene = new Scene(600, 450) {
+      title = "Youth Banking - Demo System"
+      width = 800
+      height = 600
+      scene = new Scene {
         root = new TabPane {
           tabs = Seq(minorTab, parentTab, aiRiskTab)
         }
       }
     }
   }
-
-  def showAlert(title: String, message: String): Unit = {
-    new Alert(Alert.AlertType.Information) {
+  
+  // Helper method for alerts
+  def showAlert(title: String, message: String, alertType: Alert.AlertType = Alert.AlertType.Information): Unit = {
+    new Alert(alertType) {
+      initOwner(stage)
       headerText = title
       contentText = message
     }.showAndWait()
